@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -e
+set -u
+set -o pipefail
+
+# Check for exactly one argument
+if [ ! $# -eq 1 ]; then
+  echo 'wrk takes one argument: the branch name' 1>&2
+  exit 1
+fi
+
+BRANCH_NAME="$1"
+
+# Verify this is a git directory
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+  echo 'Not a git repository' 1>&2
+  exit 1
+fi
+
+# Get the current branch
+CURRENT_BRANCH="$(git branch --show-current)"
+ORIGINAL_BRANCH="$CURRENT_BRANCH"
+SWITCHED_TO_MAIN=false
+
+# If not on main, ask if user wants to branch from main
+if [ "$CURRENT_BRANCH" != "main" ]; then
+  echo "Currently on branch: $CURRENT_BRANCH" 1>&2
+  read -p "Branch from main instead? (y/n) " -n 1 -r 1>&2
+  echo "" 1>&2
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    git checkout main
+    CURRENT_BRANCH="main"
+    SWITCHED_TO_MAIN=true
+  fi
+fi
+
+# Check if the current branch is behind remote and offer to pull
+git fetch
+if git rev-parse @{u} > /dev/null 2>&1; then
+  LOCAL=$(git rev-parse @)
+  REMOTE=$(git rev-parse @{u})
+  BASE=$(git merge-base @ @{u})
+
+  if [ "$LOCAL" != "$REMOTE" ] && [ "$LOCAL" = "$BASE" ]; then
+    echo "Branch '$CURRENT_BRANCH' is behind remote" 1>&2
+    read -p "Pull to fast-forward? (y/n) " -n 1 -r 1>&2
+    echo "" 1>&2
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+      git pull --ff-only
+    fi
+  fi
+fi
+
+# Get the current working directory name (last part of path)
+WORKING_DIR_NAME="$(basename "$(pwd)")"
+
+# Define the branches directory
+BRANCHES_DIR="../${WORKING_DIR_NAME}-branches"
+
+# Create branches directory if it doesn't exist
+if [ ! -d "$BRANCHES_DIR" ]; then
+  mkdir "$BRANCHES_DIR"
+fi
+
+# Check if the worktree directory already exists
+WORKTREE_PATH="${BRANCHES_DIR}/${BRANCH_NAME}"
+if [ -e "$WORKTREE_PATH" ]; then
+  echo "Worktree directory already exists: $WORKTREE_PATH" 1>&2
+  exit 1
+fi
+
+# Check if the branch already exists
+if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}"; then
+  echo "Branch already exists: $BRANCH_NAME" 1>&2
+  exit 1
+fi
+
+# Create the worktree with the new branch
+git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH"
+
+# If we switched to main, switch back to the original branch
+if [ "$SWITCHED_TO_MAIN" = true ]; then
+  git checkout -
+fi
+
+# Success message
+echo "Created new worktree at: $WORKTREE_PATH" 1>&2
+echo "Branch: $BRANCH_NAME" 1>&2
+echo "Happy hacking!" 1>&2
+echo ""  1>&2
+
+# Output the path to stdout so it can be used with cd $(wrk ...)
+echo "$WORKTREE_PATH"
