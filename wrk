@@ -5,7 +5,7 @@ set -o pipefail
 
 # Check for exactly one argument
 if [ ! $# -eq 1 ]; then
-  echo 'wrk takes one argument: the branch name' 1>&2
+  echo 'wrk2 takes one argument: the branch name' 1>&2
   exit 1
 fi
 
@@ -28,14 +28,14 @@ if [ "$CURRENT_BRANCH" != "main" ]; then
   read -p "Branch from main instead? (y/n) " -n 1 -r 1>&2
   echo "" 1>&2
   if [[ $REPLY =~ ^[Yy]$ ]]; then
-    git checkout main
+    git checkout main >&2
     CURRENT_BRANCH="main"
     SWITCHED_TO_MAIN=true
   fi
 fi
 
 # Check if the current branch is behind remote and offer to pull
-git fetch
+git fetch >&2
 if git rev-parse @{u} > /dev/null 2>&1; then
   LOCAL=$(git rev-parse @)
   REMOTE=$(git rev-parse @{u})
@@ -46,7 +46,7 @@ if git rev-parse @{u} > /dev/null 2>&1; then
     read -p "Pull to fast-forward? (y/n) " -n 1 -r 1>&2
     echo "" 1>&2
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-      git pull --ff-only
+      git pull --ff-only >&2
     fi
   fi
 fi
@@ -69,25 +69,60 @@ if [ -e "$WORKTREE_PATH" ]; then
   exit 1
 fi
 
-# Check if the branch already exists
+# Check if the branch already exists (locally or remotely)
+BRANCH_EXISTS=false
 if git show-ref --verify --quiet "refs/heads/${BRANCH_NAME}"; then
-  echo "Branch already exists: $BRANCH_NAME" 1>&2
-  exit 1
+  BRANCH_EXISTS=true
+elif git show-ref --verify --quiet "refs/remotes/origin/${BRANCH_NAME}"; then
+  BRANCH_EXISTS=true
 fi
 
-# Create the worktree with the new branch
-git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH"
+# Create the worktree
+if [ "$BRANCH_EXISTS" = true ]; then
+  echo "Using existing branch: $BRANCH_NAME" 1>&2
+  git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" >&2
+else
+  echo "Creating new branch: $BRANCH_NAME" 1>&2
+  git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" >&2
+fi
+
+# Copy MCP config files if they exist in the source directory
+if [ -f ".mcp.json" ]; then
+  cp ".mcp.json" "$WORKTREE_PATH/.mcp.json"
+  echo "Copied .mcp.json to worktree" 1>&2
+fi
+if [ -f ".env.mcp" ]; then
+  cp ".env.mcp" "$WORKTREE_PATH/.env.mcp"
+  echo "Copied .env.mcp to worktree" 1>&2
+fi
+if [ -d ".vercel" ]; then
+  cp -r ".vercel" "$WORKTREE_PATH/.vercel"
+  echo "Copied .vercel to worktree" 1>&2
+fi
+if [ -f ".env" ]; then
+  cp ".env" "$WORKTREE_PATH/.env"
+  echo "Copied .env to worktree" 1>&2
+fi
 
 # If we switched to main, switch back to the original branch
 if [ "$SWITCHED_TO_MAIN" = true ]; then
-  git checkout -
+  git checkout - >&2
 fi
 
 # Success message
 echo "Created new worktree at: $WORKTREE_PATH" 1>&2
 echo "Branch: $BRANCH_NAME" 1>&2
 echo "Happy hacking!" 1>&2
-echo ""  1>&2
+echo "" 1>&2
 
-# Output the path to stdout so it can be used with cd $(wrk ...)
-echo "$WORKTREE_PATH"
+# Get the absolute path for the worktree
+WORKTREE_ABS_PATH="$(cd "$WORKTREE_PATH" && pwd)"
+
+# Rename the tmux window to the branch name (if in tmux)
+if [ -n "${TMUX:-}" ]; then
+  tmux rename-window "$BRANCH_NAME"
+fi
+
+# Open a subshell in the worktree directory
+cd "$WORKTREE_ABS_PATH"
+exec "$SHELL"
