@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -e
+set -u
+set -o pipefail
+
+# Create a GitHub gist from piped input and return the URL
+
+anon=0
+public=0
+filename=""
+desc=""
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--anon|-a)
+		anon=1
+		shift
+		;;
+	--public|-p)
+		public=1
+		shift
+		;;
+	--filename|-f|--name|-n)
+		filename="$2"
+		shift 2
+		;;
+	--desc|-d)
+		desc="$2"
+		shift 2
+		;;
+	--help|-h)
+		echo "Usage: <command> | gist [options]"
+		echo ""
+		echo "Options:"
+		echo "  --anon, -a        Create anonymous gist (no auth required)"
+		echo "  --public, -p      Create public gist (default: secret)"
+		echo "  --name, -n        Set name for the gist (e.g. foo.csv)"
+		echo "  --filename, -f    Alias for --name"
+		echo "  --desc, -d        Set description for the gist"
+		echo "  --help, -h        Show this help"
+		exit 0
+		;;
+	*)
+		echo "Unknown option: $1" >&2
+		exit 1
+		;;
+	esac
+done
+
+if ! command -v gh >/dev/null 2>&1; then
+	echo "Error: gh is not installed. Install it from https://cli.github.com" >&2
+	exit 1
+fi
+
+if [[ $anon -eq 0 ]]; then
+	if ! gh auth status >/dev/null 2>&1; then
+		echo "Error: not authenticated with gh. Run 'gh auth login' or use --anon" >&2
+		exit 1
+	fi
+fi
+
+if [[ -t 0 ]]; then
+	echo "Error: nothing piped to stdin" >&2
+	exit 1
+fi
+
+args=()
+if [[ $public -eq 0 ]]; then
+	args+=(--public=false)
+else
+	args+=(--public)
+fi
+if [[ -n "$filename" ]]; then
+	args+=(--filename "$filename")
+fi
+if [[ -n "$desc" ]]; then
+	args+=(--desc "$desc")
+fi
+
+if [[ $anon -eq 1 ]]; then
+	content=$(cat)
+	fname="${filename:-gistfile1.txt}"
+	json_content=$(printf '%s' "$content" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+	json_desc=$(printf '%s' "$desc" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+	payload="{\"description\":${json_desc},\"public\":$([[ $public -eq 1 ]] && echo true || echo false),\"files\":{\"${fname}\":{\"content\":${json_content}}}}"
+	response=$(curl -s -X POST https://api.github.com/gists \
+		-H "Content-Type: application/json" \
+		-d "$payload")
+	url=$(printf '%s' "$response" | python3 -c 'import sys,json; print(json.loads(sys.stdin.read())["html_url"])')
+	if [[ -n "$url" ]]; then
+		echo "$url"
+	else
+		echo "Error: failed to create anonymous gist" >&2
+		echo "$response" >&2
+		exit 1
+	fi
+else
+	cat | gh gist create "${args[@]}" -
+fi
