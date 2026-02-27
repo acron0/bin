@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -e
+set -u
+set -o pipefail
+
+if [ $# -ne 1 ]; then
+  echo "Usage: rename-workspace <name>" >&2
+  exit 1
+fi
+
+current=$(swaymsg -t get_workspaces | jq -r '.[] | select(.focused) | .name')
+swaymsg rename workspace "$current" to "$1"
