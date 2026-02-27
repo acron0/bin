@@ -5,8 +5,12 @@ set -u
 
 if hash pbcopy 2>/dev/null; then
   exec pbcopy
+elif hash wl-copy 2>/dev/null && [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+  exec wl-copy
 elif hash xclip 2>/dev/null && [ -n "${DISPLAY:-}" ]; then
   exec xclip -selection clipboard
+elif hash xsel 2>/dev/null && [ -n "${DISPLAY:-}" ]; then
+  exec xsel --clipboard --input
 elif hash putclip 2>/dev/null; then
   exec putclip
 else
