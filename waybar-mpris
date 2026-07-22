@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Waybar MPRIS module — one-shot poll.
+
+Prints a single JSON object for a waybar custom module, then exits.
+Pair it with an "interval" in the waybar config.
+
+Why polling and not events: waybar's native `mpris` module pegs ~10% CPU
+against ostui, which starves the GTK main loop and freezes the whole bar.
+The event-driven alternative (`playerctl --follow`) is not usable either,
+because ostui never emits MPRIS PropertiesChanged signals -- so --follow
+blocks forever and the module would never update. A cheap periodic poll is
+the only approach that actually works with this player.
+"""
+
+import json
+import subprocess
+import sys
+
+SEP = "\x1f"  # unit separator; won't appear in track metadata
+FIELDS = ["status", "playerName", "artist", "title", "album"]
+FMT = SEP.join("{{%s}}" % f for f in FIELDS)
+
+# Font Awesome 6 Free Solid codepoints -- written as \u escapes on purpose:
+# pasted glyphs get silently stripped by some editors/tools, which renders the
+# module invisible. Verified present via: fc-list ":charset=f001"
+# The bar's font stack is Font Awesome 6 (see style.css), NOT a Nerd Font, so
+# Nerd-Font-only codepoints will not render here.
+PLAYER_ICONS = {
+    "spotify": "\uf001",
+    "firefox": "\uf269",
+    "chromium": "\uf268",
+    "mpv": "\uf03d",
+    "vlc": "\uf03d",
+}
+DEFAULT_ICON = "\uf001"          # fa-music
+# NOTE: ostui always reports PlaybackStatus as "" over D-Bus (it advertises
+# CanPause/CanControl = true, and PlayPause works, but it never publishes the
+# resulting state). So these never trigger for ostui and the icon cannot show
+# paused. Kept for players that do report status correctly.
+#   verify with: busctl --user get-property org.mpris.MediaPlayer2.ostui \
+#                /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlaybackStatus
+STATUS_ICONS = {
+    "Paused": "\uf04c",          # fa-pause
+    "Stopped": "\uf04d",         # fa-stop
+}
+
+HINT = "click: play/pause"
+IDLE = {"text": "", "tooltip": "", "class": "stopped"}
+
+
+def query():
+    try:
+        out = subprocess.run(
+            ["playerctl", "metadata", "--format", FMT],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip()
+
+
+def build(line):
+    parts = line.split(SEP)
+    parts += [""] * (len(FIELDS) - len(parts))
+    status, player, artist, title, album = (p.strip() for p in parts[: len(FIELDS)])
+
+    if status == "Stopped" or not (title or artist):
+        return IDLE
+
+    icon = PLAYER_ICONS.get(player.lower(), DEFAULT_ICON)
+    if status != "Playing":
+        icon = STATUS_ICONS.get(status, icon)
+
+    tooltip = "\n".join([title, artist, album, "", f"[{player}]  {HINT}"])
+    return {"text": icon, "tooltip": tooltip, "class": (status or "stopped").lower()}
+
+
+def main():
+    line = query()
+    print(json.dumps(IDLE if not line else build(line)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
