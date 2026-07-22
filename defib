@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -u
+set -o pipefail
+
+usage() {
+	echo "usage: defib [options] <command> [args...]" >&2
+	echo "  runs <command>, restarting it whenever it exits non-zero" >&2
+	echo "" >&2
+	echo "options:" >&2
+	echo "  -s, --sleep <secs>    wait <secs> between restarts (default 0)" >&2
+	echo "  -m, --max <n>         give up after <n> restarts (default: unlimited)" >&2
+	echo "  --                    stop parsing defib options" >&2
+}
+
+sleep_secs=0
+max_restarts=0 # 0 == unlimited
+
+# Parse defib's own options, stopping at the first non-option token (the command).
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-s | --sleep)
+		[ "$#" -ge 2 ] || { echo "defib: $1 requires an argument" >&2; exit 2; }
+		sleep_secs=$2
+		shift 2
+		;;
+	-m | --max)
+		[ "$#" -ge 2 ] || { echo "defib: $1 requires an argument" >&2; exit 2; }
+		max_restarts=$2
+		shift 2
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	--)
+		shift
+		break
+		;;
+	--*)
+		echo "defib: unknown option '$1'" >&2
+		usage
+		exit 2
+		;;
+	*)
+		# First non-option token: this is the command.
+		break
+		;;
+	esac
+done
+
+if [ "$#" -eq 0 ]; then
+	usage
+	exit 2
+fi
+
+restarts=0
+while true; do
+	"$@"
+	status=$?
+
+	if [ "$status" -eq 0 ]; then
+		exit 0
+	fi
+
+	restarts=$((restarts + 1))
+	if [ "$max_restarts" -gt 0 ] && [ "$restarts" -ge "$max_restarts" ]; then
+		echo "defib: '$*' failed $restarts time(s) (status $status); giving up" >&2
+		exit "$status"
+	fi
+
+	echo "defib: '$*' exited with status $status; restarting (#$restarts)..." >&2
+	[ "$sleep_secs" != "0" ] && sleep "$sleep_secs"
+done
