@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# waybar custom module: Tailscale connection status.
+# Emits a single JSON line {text, tooltip, class} for waybar to render.
+#
+# Classes (see ~/.config/waybar/style.css):
+#   connected    - backend Running, node online
+#   disconnected - backend Running but node not online yet
+#   stopped      - tailscaled up but logged out / stopped
+#   down         - tailscaled not reachable
+#
+# Icon is fa-sitemap (Font Awesome 6 Free, U+F0E8). We deliberately AVOID
+# fa-network-wired (U+F6FF): that codepoint is also claimed by the Jomolhari
+# font, so pango renders Jomolhari's blank glyph and the icon vanishes.
+# U+F0E8 is Font-Awesome-exclusive on this system, so it renders correctly.
+set -u
+
+ICON=$''
+
+json=$(tailscale status --json 2>/dev/null)
+if [[ -z "$json" ]]; then
+    printf '{"text":"%s","tooltip":"Tailscale: daemon not running","class":"down"}\n' "$ICON"
+    exit 0
+fi
+
+read -r state online host ip < <(
+    printf '%s' "$json" | jq -r '
+        [ .BackendState,
+          (.Self.Online // false | tostring),
+          (.Self.HostName // "?"),
+          (.TailscaleIPs[0] // "-")
+        ] | @tsv' 2>/dev/null
+)
+
+case "$state" in
+    Running)
+        if [[ "$online" == "true" ]]; then
+            cls="connected"
+            tip="Tailscale: connected as $host ($ip)"
+        else
+            cls="disconnected"
+            tip="Tailscale: running, node offline"
+        fi
+        ;;
+    Stopped|NeedsLogin|NoState)
+        cls="stopped"
+        tip="Tailscale: $state"
+        ;;
+    *)
+        cls="down"
+        tip="Tailscale: ${state:-unknown}"
+        ;;
+esac
+
+printf '{"text":"%s","tooltip":"%s","class":"%s"}\n' "$ICON" "$tip" "$cls"
