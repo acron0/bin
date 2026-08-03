@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -e
+set -u
+set -o pipefail
+
+if [ $# -gt 0 ]; then
+  printf '%s' "$*" | tr -d '[:space:]'
+else
+  tr -d '[:space:]'
+fi
