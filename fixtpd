@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Revive the touchpad when it goes dead under Sway.
+#
+# ---------------------------------------------------------------------------
+# OPEN QUESTION (experiment in progress, started 2026-07-14)
+#
+# CLAUDE.md blames dwt (disable-while-typing) for the dead touchpad. That
+# explanation is suspect: dwt only suppresses the pad for a fraction of a
+# second after each keystroke, so it should recover on its own the moment you
+# stop typing. It doesn't. You have to run this script.
+#
+# That points at a second hypothesis:
+#
+#   H1 (the CLAUDE.md story): dwt is the cause. Keeping it disabled is
+#      required, and the cost is losing palm rejection while typing.
+#
+#   H2 (the toggle story): dwt is incidental. What actually revives the pad is
+#      issuing ANY libinput reconfiguration — the device is wedged and the
+#      reconfig pokes it awake. If so, we can toggle and immediately restore
+#      dwt, keeping palm rejection at zero cost.
+#
+# H2 is the better outcome, and it's cheap to test: run `fixtpd --keep-dwt`.
+# That toggles the device but leaves dwt ENABLED. If the pad comes back
+# anyway, H2 is confirmed, dwt was never the culprit, and --keep-dwt should
+# become the default.
+#
+# Note focus_follows_mouse is at sway's default (yes), so under H1 a palm
+# drifting the pointer can steal keyboard focus mid-typing. That's the real
+# cost of running with dwt off, and the reason H2 is worth chasing.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+keep_dwt=0
+case "${1:-}" in
+    --keep-dwt) keep_dwt=1 ;;
+    "") ;;
+    *) echo "usage: fixtpd [--keep-dwt]" >&2; exit 2 ;;
+esac
+
+if ! command -v swaymsg >/dev/null 2>&1; then
+    echo "fixtpd: swaymsg not found — are you in a Sway session?" >&2
+    exit 1
+fi
+
+tp() { swaymsg "input type:touchpad $*" >/dev/null; }
+
+# Toggle the device off and back on. This is the poke that H2 says is doing
+# the actual work; it is harmless under H1 either way.
+tp 'events disabled'
+tp 'events enabled'
+
+# Cycle dwt/dwtp, then either leave them off (H1) or restore them (H2).
+tp 'dwt disabled'
+tp 'dwtp disabled'
+if (( keep_dwt )); then
+    tp 'dwt enabled'
+    tp 'dwtp enabled'
+    echo "fixtpd: toggled device, dwt left ENABLED (testing H2 — palm rejection kept)"
+    echo "        if the touchpad works now, dwt was never the cause."
+else
+    echo "fixtpd: toggled device, dwt left DISABLED (H1 — no palm rejection while typing)"
+fi
+
+swaymsg -t get_inputs |
+    grep -A 20 -i '"type": "touchpad"' |
+    grep -E 'send_events|"dwt"|dwtp' |
+    sed 's/^ *//;s/,$//'
