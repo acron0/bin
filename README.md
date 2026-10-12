@@ -9,6 +9,7 @@ This is a collection of useful scripts maintained by me. Not always written by m
 | Script | Description |
 |--------|-------------|
 | `rw` | Rename the currently focused Sway workspace |
+| `mountnas` | Mount the NAS at ~/nas over SSHFS (prompts for password) |
 
 ## Honourable Mentions
 I don't like to commit binaries so here are some from elsewhere that I also enjoy.
