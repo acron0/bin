@@ -44,6 +44,19 @@ fi
 
 tp() { swaymsg "input type:touchpad $*" >/dev/null; }
 
+# Separate fault (diagnosed 2026-09-14): after resume from deep sleep the pad
+# can fall back to PS/2 mode and show up as "ImPS/2 Logitech Wheel Mouse" on
+# the i8042 AUX port (serio1). The pointer still moves but there is no
+# multitouch, so two-finger scroll is gone, and toggling via libinput does
+# nothing. Fix: unbind psmouse and reload the i2c-hid driver (needs sudo).
+if [[ "$(readlink /sys/bus/serio/devices/serio1/driver 2>/dev/null)" == */psmouse ]]; then
+    echo "fixtpd: touchpad is in PS/2 fallback mode — unbinding psmouse, reloading i2c_hid_acpi"
+    echo -n serio1 | sudo tee /sys/bus/serio/drivers/psmouse/unbind >/dev/null
+    sudo modprobe -r i2c_hid_acpi
+    sudo modprobe i2c_hid_acpi
+    exit 0
+fi
+
 # Toggle the device off and back on. This is the poke that H2 says is doing
 # the actual work; it is harmless under H1 either way.
 tp 'events disabled'
