@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# waybar custom module: MEGAcmd sync status.
+# Emits a single JSON line {text, tooltip, class} for waybar to render.
+#
+# Classes (see ~/.config/waybar/style.css), worst state wins:
+#   synced   - every sync Running + Synced, no issues
+#   syncing  - transfers or calculations in progress (Syncing/Pending)
+#   issues   - sync-issues reported (e.g. a file with conflicting copies)
+#   error    - a sync is Disabled/Suspended or has an ERROR (it has "jammed")
+#   down     - mega-cmd-server not running
+#
+# Click (`waybar-mega --fix`) re-enables any sync that has switched itself
+# off. MEGA sometimes disables a sync with a bogus "Reached storage quota
+# limit" error while the account is well under quota; re-enabling fixes it.
+#
+# Icon is the MEGA logo from the Simple Icons font (simple-icons-font@16.34.0,
+# ~/.local/share/fonts/SimpleIcons.ttf), U+F127, written as an escape so
+# editors can't strip the glyph. Font Awesome ALSO claims U+F127 (link-slash),
+# so style.css gives #custom-mega its own font stack with Simple Icons first.
+# Without that rule this renders as a broken-chain icon. It also shows a
+# broken chain if waybar started before the font was installed: a SIGUSR2
+# reload doesn't pick up new fonts, so restart waybar fully.
+set -u
+
+ICON=$'\uf127'
+
+# Never let the client auto-spawn a server: bail out if it isn't running.
+if ! pgrep -x mega-cmd-server >/dev/null; then
+    printf '{"text":"%s","tooltip":"MEGA: mega-cmd-server not running","class":"down"}\n' "$ICON"
+    exit 0
+fi
+
+# Rows look like: ID|LOCALPATH|RUN_STATE|STATUS|ERROR. Keep only rows whose ID
+# looks like a sync ID, which drops the header and the "sync issues" banner.
+rows=$(timeout 3 mega-sync --col-separator='|' \
+    --output-cols=ID,LOCALPATH,RUN_STATE,STATUS,ERROR 2>/dev/null \
+    | grep -E '^[A-Za-z0-9_-]+\|' | grep -v '^ID|')
+
+if [[ "${1:-}" == "--fix" ]]; then
+    while IFS='|' read -r id _ run _ _; do
+        [[ "$run" == "Disabled" || "$run" == "Suspended" ]] && timeout 10 mega-sync --enable "$id" >/dev/null 2>&1
+    done <<< "$rows"
+    exit 0
+fi
+
+if [[ -z "$rows" ]]; then
+    printf '{"text":"%s","tooltip":"MEGA: no syncs configured","class":"down"}\n' "$ICON"
+    exit 0
+fi
+
+# Issue rows: ISSUE_ID|PARENT_SYNC|REASON (minus header / "no issues" line).
+issues=$(timeout 3 mega-sync-issues --col-separator='|' 2>/dev/null \
+    | grep '|' | grep -v '^ISSUE_ID|')
+n_issues=$(grep -c . <<< "$issues")
+
+rank=0   # 0 synced, 1 syncing, 2 issues, 3 error
+lines=()
+while IFS='|' read -r id path run status err; do
+    path=${path/#$HOME/\~}
+    if [[ "$run" != "Running" || ( -n "$err" && "$err" != "NO" ) ]]; then
+        (( rank < 3 )) && rank=3
+        lines+=("✗ $path: $run${err:+ — $err}")
+    elif [[ "$status" != "Synced" ]]; then
+        (( rank < 1 )) && rank=1
+        lines+=("↻ $path: $status")
+    else
+        lines+=("✓ $path: Synced")
+    fi
+done <<< "$rows"
+
+if (( n_issues > 0 )); then
+    (( rank < 2 )) && rank=2
+    lines+=("" "$n_issues sync issue(s):")
+    while IFS='|' read -r _ _ reason; do
+        lines+=("  • $reason")
+    done <<< "$issues"
+    lines+=("run: mega-sync-issues --detail --all")
+fi
+
+classes=(synced syncing issues error)
+cls=${classes[$rank]}
+(( rank == 3 )) && lines+=("" "click: re-enable disabled syncs")
+
+# Join with \n and JSON-escape via jq so paths/reasons can't break the output.
+tip=$(printf '%s\n' "MEGA" "${lines[@]}" | jq -Rs 'rtrimstr("\n")')
+printf '{"text":"%s","tooltip":%s,"class":"%s"}\n' "$ICON" "$tip" "$cls"
